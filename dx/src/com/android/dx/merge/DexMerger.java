@@ -33,7 +33,9 @@ import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 
 /**
  * Combine two dex files into one.
@@ -284,6 +286,14 @@ public final class DexMerger {
                 if (toWrite == null) {
                     break; // advanceA == false && advanceB == false
                 }
+                
+                if (mergeType == 1 && classToRemove.contains(toWrite)) {
+                    classIdToRemove.add(outCount);
+                }
+                if (mergeType == 2 && classIdToRemove.contains(toWrite)) {
+                    typeIdToRemove.add(outCount);
+                }
+                
                 write(toWrite);
                 outCount++;
             }
@@ -372,7 +382,14 @@ public final class DexMerger {
         }
     }
 
+    int mergeType = 0; // 1 for stringid, 2 for typeid
+    public Set<String> classToRemove = new HashSet();
+    private Set<Integer> classIdToRemove = new HashSet();
+    private Set<Integer> typeIdToRemove = new HashSet();
     private void mergeStringIds() {
+        classIdToRemove.clear();
+        typeIdToRemove.clear();
+        mergeType = 1;
         new IdMerger<String>(idsDefsOut) {
             @Override TableOfContents.Section getSection(TableOfContents tableOfContents) {
                 return tableOfContents.stringIds;
@@ -392,9 +409,11 @@ public final class DexMerger {
                 stringDataOut.writeStringData(value);
             }
         }.mergeSorted();
+        mergeType = 0;
     }
 
     private void mergeTypeIds() {
+        mergeType = 2;
         new IdMerger<Integer>(idsDefsOut) {
             @Override TableOfContents.Section getSection(TableOfContents tableOfContents) {
                 return tableOfContents.typeIds;
@@ -416,6 +435,7 @@ public final class DexMerger {
                 idsDefsOut.writeInt(value);
             }
         }.mergeSorted();
+        mergeType = 0;
     }
 
     private void mergeTypeLists() {
@@ -549,6 +569,17 @@ public final class DexMerger {
         readSortableTypes(sortableTypes, dexA, aIndexMap);
         readSortableTypes(sortableTypes, dexB, bIndexMap);
 
+        
+        for (int i = 0; i < sortableTypes.length; i++) {
+            SortableType sortableType = sortableTypes[i];
+            if (sortableType != null) {
+                if (typeIdToRemove.contains(sortableType.getClassDef()
+                        .getTypeIndex())) {
+                    sortableTypes[i] = null;
+                }
+            }
+        }
+        
         /*
          * Populate the depths of each sortable type. This makes D iterations
          * through all N types, where 'D' is the depth of the deepest type. For
@@ -1072,7 +1103,10 @@ public final class DexMerger {
 
         DexBuffer dexA = new DexBuffer(new File(args[1]));
         DexBuffer dexB = new DexBuffer(new File(args[2]));
-        DexBuffer merged = new DexMerger(dexA, dexB, CollisionPolicy.KEEP_FIRST).merge();
+        DexMerger dexMerger = new DexMerger(dexA, dexB, CollisionPolicy.KEEP_FIRST);
+        dexMerger.classToRemove.add("Ltest/Type1;");
+        dexMerger.classToRemove.add("Ltest/Type2;");
+        DexBuffer merged = dexMerger.merge();
         merged.writeTo(new File(args[0]));
     }
 
