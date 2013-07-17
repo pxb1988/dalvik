@@ -47,6 +47,7 @@ public final class IndexMap {
     private final HashMap<Integer, Integer> typeListOffsets;
     private final HashMap<Integer, Integer> annotationOffsets;
     private final HashMap<Integer, Integer> annotationSetOffsets;
+    private final HashMap<Integer, Integer> annotationSetRefOffsets;
     private final HashMap<Integer, Integer> annotationDirectoryOffsets;
     private final HashMap<Integer, Integer> staticValuesOffsets;
 
@@ -62,6 +63,7 @@ public final class IndexMap {
         this.annotationSetOffsets = new HashMap<Integer, Integer>();
         this.annotationDirectoryOffsets = new HashMap<Integer, Integer>();
         this.staticValuesOffsets = new HashMap<Integer, Integer>();
+        this.annotationSetRefOffsets = new HashMap<Integer, Integer>();
 
         /*
          * A type list, annotation set, annotation directory, or static value at
@@ -71,6 +73,7 @@ public final class IndexMap {
         this.annotationSetOffsets.put(0, 0);
         this.annotationDirectoryOffsets.put(0, 0);
         this.staticValuesOffsets.put(0, 0);
+        this.annotationSetRefOffsets.put(0, 0);
     }
 
     public void putTypeListOffset(int oldOffset, int newOffset) {
@@ -92,6 +95,13 @@ public final class IndexMap {
             throw new IllegalArgumentException();
         }
         annotationSetOffsets.put(oldOffset, newOffset);
+    }
+    
+    public void putAnnotationSetRefOffset(int oldOffset, int newOffset) {
+        if (oldOffset <= 0 || newOffset <= 0) {
+            throw new IllegalArgumentException();
+        }
+        annotationSetRefOffsets.put(oldOffset, newOffset);
     }
 
     public void putAnnotationDirectoryOffset(int oldOffset, int newOffset) {
@@ -149,6 +159,10 @@ public final class IndexMap {
 
     public int adjustAnnotationSet(int annotationSetOffset) {
         return annotationSetOffsets.get(annotationSetOffset);
+    }
+    
+    public int adjustAnnotationSetRef(int annotationSetOffset) {
+        return annotationSetRefOffsets.get(annotationSetOffset);
     }
 
     public int adjustAnnotationDirectory(int annotationDirectoryOffset) {

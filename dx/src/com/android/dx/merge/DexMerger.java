@@ -16,18 +16,6 @@
 
 package com.android.dx.merge;
 
-import com.android.dx.dex.SizeOf;
-import com.android.dx.dex.TableOfContents;
-import com.android.dx.io.Annotation;
-import com.android.dx.io.ClassData;
-import com.android.dx.io.ClassDef;
-import com.android.dx.io.Code;
-import com.android.dx.io.DexBuffer;
-import com.android.dx.io.DexHasher;
-import com.android.dx.io.FieldId;
-import com.android.dx.io.MethodId;
-import com.android.dx.io.ProtoId;
-import com.android.dx.util.DexException;
 import java.io.File;
 import java.io.IOException;
 import java.util.ArrayList;
@@ -36,6 +24,21 @@ import java.util.Collections;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
+
+import com.android.dx.dex.SizeOf;
+import com.android.dx.dex.TableOfContents;
+import com.android.dx.dex.TableOfContents.Section;
+import com.android.dx.io.Annotation;
+import com.android.dx.io.ClassData;
+import com.android.dx.io.ClassDef;
+import com.android.dx.io.Code;
+import com.android.dx.io.DexBuffer;
+import com.android.dx.io.DexHasher;
+import com.android.dx.io.EncodedValue;
+import com.android.dx.io.FieldId;
+import com.android.dx.io.MethodId;
+import com.android.dx.io.ProtoId;
+import com.android.dx.util.DexException;
 
 /**
  * Combine two dex files into one.
@@ -166,7 +169,10 @@ public final class DexMerger {
         mergeFieldIds();
         mergeMethodIds();
         mergeAnnotations();
-        unionAnnotationSetsAndDirectories();
+        mergeAnnotationSets();
+        mergeAnnotationSetRefs();
+        mergeAnnotationDirectory();
+        mergeStaticValue();
         mergeClassDefs();
 
         // write the header
@@ -194,7 +200,7 @@ public final class DexMerger {
          */
         WriterSizes compactedSizes = new WriterSizes(this);
         int wastedByteCount = writerSizes.size() - compactedSizes.size();
-        if (wastedByteCount >  + compactWasteThreshold) {
+//        if (wastedByteCount >  + compactWasteThreshold) {
             DexMerger compacter = new DexMerger(
                     dexOut, new DexBuffer(), CollisionPolicy.FAIL, compactedSizes);
             result = compacter.mergeDexBuffers();
@@ -202,7 +208,7 @@ public final class DexMerger {
                     dexOut.getLength() / 1024f,
                     result.getLength() / 1024f,
                     wastedByteCount / 1024f);
-        }
+//        }
 
         long elapsed = System.nanoTime() - start;
         System.out.printf("Merged dex A (%d defs/%.1fKiB) with dex B "
@@ -458,6 +464,151 @@ public final class DexMerger {
         }.mergeUnsorted();
     }
 
+    static class AnnotationDirectory implements Comparable<AnnotationDirectory> {
+
+        int cmp(List<int[]> a, List<int[]> b) {
+            if (a.size() == b.size()) {
+                for (int i = 0; 9 < a.size(); i++) {
+                    int aE[] = a.get(i);
+                    int bE[] = b.get(i);
+                    if (aE.length == bE.length) {
+                        for (int j = 0; j < aE.length; i++) {
+                            if (aE[j] != bE[j]) {
+                                return aE[i] - bE[j];
+                            }
+                        }
+                    } else {
+                        return aE.length - bE.length;
+                    }
+                }
+                return 0;
+            } else {
+                return a.size() - b.size();
+            }
+        }
+
+        int clazz;
+        List<int[]> methods = new ArrayList<int[]>();
+        List<int[]> fields = new ArrayList<int[]>();
+        List<int[]> parameters = new ArrayList<int[]>();
+
+        @Override
+        public int compareTo(AnnotationDirectory o) {
+            if (clazz != o.clazz) {
+                return clazz - o.clazz;
+            } else {
+                int x = cmp(this.methods, o.methods);
+                if (x != 0) {
+                    return x;
+                }
+                x = cmp(this.fields, o.fields);
+                if (x != 0) {
+                    return x;
+                }
+                x = cmp(this.parameters, o.parameters);
+                return x;
+            }
+        }
+    }
+    static class IntArray implements Comparable<IntArray> {
+        final public int values[];
+
+        public IntArray(int[] annotations) {
+            super();
+            this.values = annotations;
+        }
+
+        public String toString() {
+            return values.length + " " + Arrays.toString(values);
+        }
+
+        @Override
+        public int compareTo(IntArray o) {
+            if (values.length == o.values.length) {
+                for (int i = 0; i < values.length; i++) {
+                    if (values[i] != o.values[i]) {
+                        return values[i] - o.values[i];
+                    }
+                }
+                return 0;
+            } else {
+                return values.length - o.values.length;
+            }
+        }
+    }
+
+    private void mergeAnnotationSets() {
+        annotationSetOut.assertFourByteAligned();
+        new IdMerger<IntArray>(annotationSetOut) {
+
+            @Override
+            Section getSection(TableOfContents tableOfContents) {
+                return tableOfContents.annotationSets;
+            }
+
+            @Override
+            IntArray read(com.android.dx.io.DexBuffer.Section in, IndexMap indexMap, int index) {
+                int size = in.readInt();
+                int annotations[] = new int[size];
+                for (int i = 0; i < size; i++) {
+                    annotations[i] = indexMap.adjustAnnotation(in.readInt());
+                }
+                return new IntArray(annotations);
+            }
+
+            @Override
+            void updateIndex(int offset, IndexMap indexMap, int oldIndex, int newIndex) {
+                indexMap.putAnnotationSetOffset(offset, annotationSetOut.getPosition());
+            }
+
+            @Override
+            void write(IntArray value) {
+                int size = value.values.length;
+                annotationSetOut.writeInt(size);
+                for (int j = 0; j < size; j++) {
+                    annotationSetOut.writeInt(value.values[j]);
+                }
+                contentsOut.annotationSets.size++;
+            }
+        }.mergeUnsorted();
+    }
+
+    private void mergeAnnotationSetRefs() {
+        annotationSetRefListOut.assertFourByteAligned();
+        new IdMerger<IntArray>(annotationSetRefListOut) {
+
+            @Override
+            Section getSection(TableOfContents tableOfContents) {
+                return tableOfContents.annotationSetRefLists;
+            }
+
+            @Override
+            IntArray read(com.android.dx.io.DexBuffer.Section in, IndexMap indexMap, int index) {
+                int size = in.readInt();
+                int annotations[] = new int[size];
+                for (int i = 0; i < size; i++) {
+                    annotations[i] = indexMap.adjustAnnotation(in.readInt());
+                }
+                return new IntArray(annotations);
+            }
+
+            @Override
+            void updateIndex(int offset, IndexMap indexMap, int oldIndex, int newIndex) {
+                indexMap.putAnnotationSetRefOffset(offset, annotationSetRefListOut.getPosition());
+            }
+
+            @Override
+            void write(IntArray value) {
+                int size = value.values.length;
+                annotationSetRefListOut.writeInt(size);
+                for (int j = 0; j < size; j++) {
+                    annotationSetRefListOut.writeInt(value.values[j]);
+                }
+                contentsOut.annotationSetRefLists.size++;
+            }
+        }.mergeUnsorted();
+    }
+    
     private void mergeProtoIds() {
         new IdMerger<ProtoId>(idsDefsOut) {
             @Override TableOfContents.Section getSection(TableOfContents tableOfContents) {
@@ -527,6 +678,63 @@ public final class DexMerger {
         }.mergeSorted();
     }
 
+    private void mergeAnnotationDirectory() {
+        new IdMerger<AnnotationDirectory>(annotationsDirectoryOut) {
+
+            @Override
+            Section getSection(TableOfContents tableOfContents) {
+                return tableOfContents.annotationsDirectories;
+            }
+
+            @Override
+            AnnotationDirectory read(com.android.dx.io.DexBuffer.Section in, IndexMap indexMap, int index) {
+                AnnotationDirectory ad = new AnnotationDirectory();
+                ad.clazz = indexMap.adjustAnnotationSet(in.readInt());
+                int fieldSize = in.readInt();
+                int methodSize = in.readInt();
+                int parameterSize = in.readInt();
+                for (int i = 0; i < fieldSize; i++) {
+                    ad.fields.add(new int[] { indexMap.adjustField(in.readInt()),
+                            indexMap.adjustAnnotationSet(in.readInt()) });
+                }
+                for (int i = 0; i < methodSize; i++) {
+                    ad.methods.add(new int[] { indexMap.adjustMethod(in.readInt()),
+                            indexMap.adjustAnnotationSet(in.readInt()) });
+                }
+                for (int i = 0; i < parameterSize; i++) {
+                    ad.parameters.add(new int[] { indexMap.adjustMethod(in.readInt()),
+                            indexMap.adjustAnnotationSetRef(in.readInt()) });
+                }
+                return ad;
+            }
+
+            @Override
+            void updateIndex(int offset, IndexMap indexMap, int oldIndex, int newIndex) {
+                indexMap.putAnnotationDirectoryOffset(offset, annotationsDirectoryOut.getPosition());
+            }
+
+            @Override
+            void write(AnnotationDirectory value) {
+                contentsOut.annotationsDirectories.size++;
+                annotationsDirectoryOut.writeInt(value.clazz);
+                annotationsDirectoryOut.writeInt(value.fields.size());
+                annotationsDirectoryOut.writeInt(value.methods.size());
+                annotationsDirectoryOut.writeInt(value.parameters.size());
+                for (int[] a : value.fields) {
+                    annotationsDirectoryOut.writeInt(a[0]);
+                    annotationsDirectoryOut.writeInt(a[1]);
+                }
+                for (int[] a : value.methods) {
+                    annotationsDirectoryOut.writeInt(a[0]);
+                    annotationsDirectoryOut.writeInt(a[1]);
+                }
+                for (int[] a : value.parameters) {
+                    annotationsDirectoryOut.writeInt(a[0]);
+                    annotationsDirectoryOut.writeInt(a[1]);
+                }
+            }
+        }.mergeUnsorted();
+    }
     private void mergeAnnotations() {
         new IdMerger<Annotation>(annotationOut) {
             @Override TableOfContents.Section getSection(TableOfContents tableOfContents) {
@@ -627,51 +835,6 @@ public final class DexMerger {
     }
 
     /**
-     * Copy annotation sets from each input to the output.
-     *
-     * TODO: this may write multiple copies of the same annotation set.
-     * We should shrink the output by merging rather than unioning
-     */
-    private void unionAnnotationSetsAndDirectories() {
-        transformAnnotationSets(dexA, aIndexMap);
-        transformAnnotationSets(dexB, bIndexMap);
-        transformAnnotationDirectories(dexA, aIndexMap);
-        transformAnnotationDirectories(dexB, bIndexMap);
-        transformStaticValues(dexA, aIndexMap);
-        transformStaticValues(dexB, bIndexMap);
-    }
-
-    private void transformAnnotationSets(DexBuffer in, IndexMap indexMap) {
-        TableOfContents.Section section = in.getTableOfContents().annotationSets;
-        if (section.exists()) {
-            DexBuffer.Section setIn = in.open(section.off);
-            for (int i = 0; i < section.size; i++) {
-                transformAnnotationSet(indexMap, setIn);
-            }
-        }
-    }
-
-    private void transformAnnotationDirectories(DexBuffer in, IndexMap indexMap) {
-        TableOfContents.Section section = in.getTableOfContents().annotationsDirectories;
-        if (section.exists()) {
-            DexBuffer.Section directoryIn = in.open(section.off);
-            for (int i = 0; i < section.size; i++) {
-                transformAnnotationDirectory(in, directoryIn, indexMap);
-            }
-        }
-    }
-
-    private void transformStaticValues(DexBuffer in, IndexMap indexMap) {
-        TableOfContents.Section section = in.getTableOfContents().encodedArrays;
-        if (section.exists()) {
-            DexBuffer.Section staticValuesIn = in.open(section.off);
-            for (int i = 0; i < section.size; i++) {
-                transformStaticValues(staticValuesIn, indexMap);
-            }
-        }
-    }
-
-    /**
      * Reads a class_def_item beginning at {@code in} and writes the index and
      * data.
      */
@@ -699,81 +862,6 @@ public final class DexMerger {
 
         int staticValuesOff = classDef.getStaticValuesOffset();
         idsDefsOut.writeInt(indexMap.adjustStaticValues(staticValuesOff));
-    }
-
-    /**
-     * Transform all annotations on a class.
-     */
-    private void transformAnnotationDirectory(
-            DexBuffer in, DexBuffer.Section directoryIn, IndexMap indexMap) {
-        contentsOut.annotationsDirectories.size++;
-        annotationsDirectoryOut.assertFourByteAligned();
-        indexMap.putAnnotationDirectoryOffset(
-                directoryIn.getPosition(), annotationsDirectoryOut.getPosition());
-
-        int classAnnotationsOffset = indexMap.adjustAnnotationSet(directoryIn.readInt());
-        annotationsDirectoryOut.writeInt(classAnnotationsOffset);
-
-        int fieldsSize = directoryIn.readInt();
-        annotationsDirectoryOut.writeInt(fieldsSize);
-
-        int methodsSize = directoryIn.readInt();
-        annotationsDirectoryOut.writeInt(methodsSize);
-
-        int parameterListSize = directoryIn.readInt();
-        annotationsDirectoryOut.writeInt(parameterListSize);
-
-        for (int i = 0; i < fieldsSize; i++) {
-            // field index
-            annotationsDirectoryOut.writeInt(indexMap.adjustField(directoryIn.readInt()));
-
-            // annotations offset
-            annotationsDirectoryOut.writeInt(indexMap.adjustAnnotationSet(directoryIn.readInt()));
-        }
-
-        for (int i = 0; i < methodsSize; i++) {
-            // method index
-            annotationsDirectoryOut.writeInt(indexMap.adjustMethod(directoryIn.readInt()));
-
-            // annotation set offset
-            annotationsDirectoryOut.writeInt(
-                    indexMap.adjustAnnotationSet(directoryIn.readInt()));
-        }
-
-        for (int i = 0; i < parameterListSize; i++) {
-            contentsOut.annotationSetRefLists.size++;
-            annotationSetRefListOut.assertFourByteAligned();
-
-            // method index
-            annotationsDirectoryOut.writeInt(indexMap.adjustMethod(directoryIn.readInt()));
-
-            // annotations offset
-            annotationsDirectoryOut.writeInt(annotationSetRefListOut.getPosition());
-            DexBuffer.Section refListIn = in.open(directoryIn.readInt());
-
-            // parameters
-            int parameterCount = refListIn.readInt();
-            annotationSetRefListOut.writeInt(parameterCount);
-            for (int p = 0; p < parameterCount; p++) {
-                annotationSetRefListOut.writeInt(indexMap.adjustAnnotationSet(refListIn.readInt()));
-            }
-        }
-    }
-
-    /**
-     * Transform all annotations on a single type, member or parameter.
-     */
-    private void transformAnnotationSet(IndexMap indexMap, DexBuffer.Section setIn) {
-        contentsOut.annotationSets.size++;
-        annotationSetOut.assertFourByteAligned();
-        indexMap.putAnnotationSetOffset(setIn.getPosition(), annotationSetOut.getPosition());
-
-        int size = setIn.readInt();
-        annotationSetOut.writeInt(size);
-
-        for (int j = 0; j < size; j++) {
-            annotationSetOut.writeInt(indexMap.adjustAnnotation(setIn.readInt()));
-        }
     }
 
     private void transformClassData(DexBuffer in, ClassData classData, IndexMap indexMap) {
@@ -995,10 +1083,30 @@ public final class DexMerger {
         }
     }
 
-    private void transformStaticValues(DexBuffer.Section in, IndexMap indexMap) {
-        contentsOut.encodedArrays.size++;
-        indexMap.putStaticValuesOffset(in.getPosition(), encodedArrayOut.getPosition());
-        indexMap.adjustEncodedArray(in.readEncodedArray()).writeTo(encodedArrayOut);
+    private void mergeStaticValue() {
+        new IdMerger<EncodedValue>(encodedArrayOut) {
+
+            @Override
+            Section getSection(TableOfContents tableOfContents) {
+                return tableOfContents.encodedArrays;
+            }
+
+            @Override
+            EncodedValue read(com.android.dx.io.DexBuffer.Section in, IndexMap indexMap, int index) {
+                return indexMap.adjustEncodedValue(in.readEncodedArray());
+            }
+
+            @Override
+            void updateIndex(int offset, IndexMap indexMap, int oldIndex, int newIndex) {
+                indexMap.putStaticValuesOffset(offset, encodedArrayOut.getPosition());
+            }
+
+            @Override
+            void write(EncodedValue value) {
+                contentsOut.encodedArrays.size++;
+                value.writeTo(encodedArrayOut);
+            }
+        }.mergeUnsorted();
     }
 
     /**
