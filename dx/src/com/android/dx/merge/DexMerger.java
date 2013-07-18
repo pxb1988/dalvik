@@ -468,11 +468,11 @@ public final class DexMerger {
 
         int cmp(List<int[]> a, List<int[]> b) {
             if (a.size() == b.size()) {
-                for (int i = 0; 9 < a.size(); i++) {
+                for (int i = 0; i < a.size(); i++) {
                     int aE[] = a.get(i);
                     int bE[] = b.get(i);
                     if (aE.length == bE.length) {
-                        for (int j = 0; j < aE.length; i++) {
+                        for (int j = 0; j < aE.length; j++) {
                             if (aE[j] != bE[j]) {
                                 return aE[i] - bE[j];
                             }
@@ -587,7 +587,7 @@ public final class DexMerger {
                 int size = in.readInt();
                 int annotations[] = new int[size];
                 for (int i = 0; i < size; i++) {
-                    annotations[i] = indexMap.adjustAnnotation(in.readInt());
+                    annotations[i] = indexMap.adjustAnnotationSet(in.readInt());
                 }
                 return new IntArray(annotations);
             }
@@ -1093,7 +1093,7 @@ public final class DexMerger {
 
             @Override
             EncodedValue read(com.android.dx.io.DexBuffer.Section in, IndexMap indexMap, int index) {
-                return indexMap.adjustEncodedValue(in.readEncodedArray());
+                return indexMap.adjustEncodedArray(in.readEncodedArray());
             }
 
             @Override
